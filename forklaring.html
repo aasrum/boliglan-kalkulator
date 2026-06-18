@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="no">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Underlag for renteendring – boliglån</title>
+<style>
+  :root { --ink:#1a1a1a; --muted:#555; --line:#ccc; --accent:#1f5fae; --hl:#fff7d6; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: #e9ecef; color: var(--ink);
+    font-family: "Times New Roman", Georgia, serif; line-height: 1.5;
+  }
+  .toolbar {
+    position: sticky; top: 0; background: #fff; border-bottom: 1px solid var(--line);
+    padding: 10px 16px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+    font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  .toolbar button, .toolbar a {
+    font: inherit; font-size: .9rem; padding: 8px 14px; border-radius: 8px;
+    border: 1px solid var(--line); background: #f4f6f8; color: var(--ink);
+    cursor: pointer; text-decoration: none;
+  }
+  .toolbar button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .toolbar .note { color: var(--muted); font-size: .82rem; margin-left: auto; }
+  .page {
+    background: #fff; max-width: 800px; margin: 24px auto; padding: 48px 56px;
+    box-shadow: 0 2px 14px rgba(0,0,0,.12);
+  }
+  h1 { font-size: 1.5rem; margin: 0 0 2px; }
+  h2 { font-size: 1.12rem; margin: 26px 0 8px; border-bottom: 2px solid var(--ink); padding-bottom: 3px; }
+  .meta { color: var(--muted); font-size: .9rem; margin-bottom: 18px; }
+  p { margin: 8px 0; }
+  table { width: 100%; border-collapse: collapse; margin: 10px 0; font-size: .95rem; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .calc { font-family: "SF Mono", Menlo, Consolas, monospace; font-size: .86rem; background: #f6f7f9;
+    border-left: 3px solid var(--accent); padding: 8px 12px; margin: 8px 0; white-space: pre-wrap; }
+  .hl { background: var(--hl); padding: 0 3px; font-weight: bold; }
+  .concl { border: 2px solid var(--accent); border-radius: 8px; padding: 14px 18px; margin: 16px 0; background: #f4f8fd; }
+  .small { font-size: .82rem; color: var(--muted); }
+  ul { margin: 8px 0; padding-left: 22px; }
+  @media print {
+    body { background: #fff; }
+    .toolbar { display: none; }
+    .page { box-shadow: none; margin: 0; max-width: none; padding: 0; }
+    h2 { page-break-after: avoid; }
+    table, .calc, .concl { page-break-inside: avoid; }
+  }
+</style>
+</head>
+<body>
+<div class="toolbar">
+  <button class="primary" onclick="window.print()">🖨️ Skriv ut / lagre som PDF</button>
+  <button onclick="copyText(event)">📋 Kopier som tekst</button>
+  <a href="boliglan.html">← Tilbake til kalkulator</a>
+  <span class="note" id="srcNote"></span>
+</div>
+
+<div class="page" id="doc"></div>
+
+<script>
+const nf  = new Intl.NumberFormat('nb-NO', { maximumFractionDigits: 0 });
+const nf2 = new Intl.NumberFormat('nb-NO', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const nf3 = new Intl.NumberFormat('nb-NO', { minimumFractionDigits: 3, maximumFractionDigits: 3 });
+const kr  = v => nf.format(Math.round(v)) + ' kr';
+const pct = (v,d=2) => (d===3?nf3:nf2).format(v) + ' %';
+
+const defaults = { P:3540000, skueRate:5.2, skueFee:60, months:241, termAmount:23756,
+  moveAmt:2300000, spkRate:4.698, spkFee:60, skueStayRate:5.55, skueListRate:5.70,
+  skueDiscount:0.15, costEstab:1800, costTing:545, costSkuePrio:300, costSkueChg:300, costOther:0,
+  startDate:null, asOfDate:null, spkMonths:null, skueMonths:null };
+
+let p = { ...defaults }, usedStored = false;
+try {
+  const s = JSON.parse(localStorage.getItem('boliglanInput'));
+  if (s && typeof s === 'object') { p = { ...defaults, ...s }; usedStored = true; }
+} catch (e) {}
+// Bruk effektiv restgjeld/restløpetid (per «regn per»-dato) når den finnes
+if (p.effP != null) p.P = p.effP;
+if (p.effMonths != null) p.months = p.effMonths;
+
+function annuity(P, r, n) { return r === 0 ? P/n : P*r/(1 - Math.pow(1+r, -n)); }
+function schedule(P, pct, fee, n) {
+  const r = pct/100/12, pay = annuity(P, r, n);
+  let bal = P, si = 0, sf = 0, sp = 0, m = 0;
+  while (bal > 0.005 && m < 1200) {
+    m++; const i = bal*r; let pr = pay - i, pmt = pay;
+    if (pr >= bal) { pr = bal; pmt = bal + i; }
+    bal -= pr; si += i; sf += fee; sp += pmt + fee;
+  }
+  return { sumInt: si, sumFee: sf, sumPay: sp, monthly: pay + fee, months: m, r, pay };
+}
+
+const n = Math.round(p.months);
+const stay = p.P - p.moveAmt;
+const oneTime = p.costEstab + p.costTing + p.costSkuePrio + p.costSkueChg + p.costOther;
+// Egne nedbetalingstider per del (tom = full restløpetid n)
+const spkN  = p.spkMonths  ? Math.max(1, Math.round(+p.spkMonths))  : n;
+const skueN = p.skueMonths ? Math.max(1, Math.round(+p.skueMonths)) : n;
+
+const A    = schedule(p.P, p.skueRate, p.skueFee, n);
+const Bspk = schedule(p.moveAmt, p.spkRate, p.spkFee, spkN);
+const Bsku = stay > 0 ? schedule(stay, p.skueStayRate, p.skueFee, skueN)
+                      : { sumInt:0,sumFee:0,sumPay:0,monthly:0,months:0,pay:0 };
+const aTotal = A.sumPay;
+const bTotal = Bspk.sumPay + Bsku.sumPay + oneTime;
+const saving = aTotal - bTotal;
+const bMonthly = Bspk.monthly + Bsku.monthly;
+
+// Break-even-rente: Skue på hele lånet slik at total = bTotal
+const costAt = r => schedule(p.P, r, p.skueFee, n).sumPay;
+let lo = 0, hi = 15, match = NaN;
+if (costAt(lo) <= bTotal && bTotal <= costAt(hi)) {
+  for (let k = 0; k < 80; k++) { const mid = (lo+hi)/2; costAt(mid) < bTotal ? lo = mid : hi = mid; }
+  match = (lo+hi)/2;
+} else { match = bTotal > costAt(hi) ? hi : 0; }
+
+const today = new Date().toLocaleDateString('nb-NO', { year:'numeric', month:'long', day:'numeric' });
+const years = (n/12).toFixed(1).replace('.', ',');
+
+document.getElementById('srcNote').textContent = usedStored
+  ? 'Tallene er hentet fra din kalkulator.' : 'Standardtall (åpne via kalkulatoren for dine egne tall).';
+
+const html = `
+<h1>Underlag for søknad om renteendring på boliglån</h1>
+<div class="meta">Utarbeidet ${today}${p.asOfDate ? ` · Tall per ${new Date(p.asOfDate).toLocaleDateString('nb-NO',{day:'numeric',month:'long',year:'numeric'})}` : ''} · Bank: Skue Sparebank · Restgjeld: ${kr(p.P)}</div>
+
+<p>Dette dokumentet sammenligner kostnaden ved å beholde hele boliglånet i Skue Sparebank
+til tilbudt rente, mot å flytte ${kr(p.moveAmt)} av lånet til Statens pensjonskasse (SPK).
+Formålet er å vise hvilken rente Skue må tilby på hele lånet for at jeg ikke skal være
+tjent med å flytte deler av det.</p>
+
+<h2>1. Forutsetninger</h2>
+<table>
+  <tr><td>Restgjeld i dag</td><td class="n">${kr(p.P)}</td></tr>
+  <tr><td>Restløpetid</td><td class="n">${n} terminer (${years} år)</td></tr>
+  <tr><td>Terminbeløp i dag (grunnlag for løpetid)</td><td class="n">${kr(p.termAmount)}</td></tr>
+  <tr><td>Termingebyr (begge banker)</td><td class="n">${kr(p.skueFee)}/mnd</td></tr>
+  <tr><td><b>Skue – tilbudt rente på hele lånet</b></td><td class="n"><b>${pct(p.skueRate)}</b></td></tr>
+  <tr><td>Skue – listepris / min rabatt</td><td class="n">${pct(p.skueListRate)} − ${nf2.format(p.skueDiscount)} pp</td></tr>
+  <tr><td>Skue – min rente på gjenværende del ved flytting</td><td class="n">${pct(p.skueStayRate)}</td></tr>
+  <tr><td><b>SPK – nominell rente</b></td><td class="n"><b>${pct(p.spkRate,3)}</b></td></tr>
+  <tr><td>Beløp som flyttes til SPK</td><td class="n">${kr(p.moveAmt)}</td></tr>
+  <tr><td>Beløp som blir igjen i Skue</td><td class="n">${kr(stay)}</td></tr>
+</table>
+<p class="small">SPK-rente og Skue listepris er hentet fra bankenes egne nettsider. Restløpetiden er
+utledet av terminbeløpet ved tilbudt rente.</p>
+
+<h2>2. Metode</h2>
+<p>${(spkN===n && skueN===n)
+  ? `Begge alternativene regnes som annuitetslån over <b>samme restløpetid (${n} terminer)</b>, slik at lånet er nedbetalt på samme tidspunkt og kostnadene er direkte sammenlignbare.`
+  : `Alternativ A regnes over ${n} terminer. I alternativ B er det valgt egen nedbetalingstid på delene (SPK ${spkN}, Skue ${stay>0?skueN:0} terminer); kortere tid gir høyere månedlig betaling, men lavere totale renter. Total-tallene gjelder da ulik tidshorisont.`}
+Månedlig terminbeløp (uten gebyr) for et annuitetslån er:</p>
+<div class="calc">terminbeløp = K · r / (1 − (1 + r)^−n)
+   K = lånebeløp,  r = nominell rente / 12,  n = antall terminer</div>
+<p>Total kostnad = sum av alle terminbeløp + sum av termingebyr (+ engangskostnader ved flytting).</p>
+
+<h2>3. Alternativ A – hele lånet i Skue til ${pct(p.skueRate)}</h2>
+<div class="calc">r = ${pct(p.skueRate)} / 12 = ${nf3.format(p.skueRate/12)} % per måned
+terminbeløp = ${nf.format(p.P)} · ${(p.skueRate/100/12).toFixed(6)} / (1 − (1 + ${(p.skueRate/100/12).toFixed(6)})^−${n})
+            = ${kr(A.pay)} + ${kr(p.skueFee)} gebyr = ${kr(A.monthly)}/mnd</div>
+<table>
+  <tr><td>Månedlig betaling (inkl. gebyr)</td><td class="n">${kr(A.monthly)}</td></tr>
+  <tr><td>Sum renter over ${n} terminer</td><td class="n">${kr(A.sumInt)}</td></tr>
+  <tr><td>Sum termingebyr</td><td class="n">${kr(A.sumFee)}</td></tr>
+  <tr><td><b>Totalt betalt (A)</b></td><td class="n"><b>${kr(aTotal)}</b></td></tr>
+</table>
+
+<h2>4. Alternativ B – ${kr(p.moveAmt)} til SPK, ${kr(stay)} blir i Skue</h2>
+<table>
+  <tr><th>Del</th><th class="n">Beløp</th><th class="n">Rente</th><th class="n">Terminer</th><th class="n">Mnd. betaling</th><th class="n">Sum renter</th></tr>
+  <tr><td>SPK</td><td class="n">${kr(p.moveAmt)}</td><td class="n">${pct(p.spkRate,3)}</td><td class="n">${spkN}</td><td class="n">${kr(Bspk.monthly)}</td><td class="n">${kr(Bspk.sumInt)}</td></tr>
+  <tr><td>Skue (rest)</td><td class="n">${kr(stay)}</td><td class="n">${pct(p.skueStayRate)}</td><td class="n">${stay>0?skueN:0}</td><td class="n">${kr(Bsku.monthly)}</td><td class="n">${kr(Bsku.sumInt)}</td></tr>
+</table>
+<p>Engangskostnader ved å flytte:</p>
+<table>
+  <tr><td>SPK – etableringsgebyr</td><td class="n">${kr(p.costEstab)}</td></tr>
+  <tr><td>SPK – tinglysing pantedokument</td><td class="n">${kr(p.costTing)}</td></tr>
+  <tr><td>Skue – prioritetsvikelse / pantefrafall</td><td class="n">${kr(p.costSkuePrio)}</td></tr>
+  <tr><td>Skue – endring av lån / sikkerhet</td><td class="n">${kr(p.costSkueChg)}</td></tr>
+  ${p.costOther>0?`<tr><td>Annet</td><td class="n">${kr(p.costOther)}</td></tr>`:''}
+  <tr><td><b>Sum engangskostnader</b></td><td class="n"><b>${kr(oneTime)}</b></td></tr>
+</table>
+<table>
+  <tr><td>Månedlig betaling totalt (inkl. gebyr)</td><td class="n">${kr(bMonthly)}</td></tr>
+  <tr><td>Herav sum renter (SPK + Skue)</td><td class="n">${kr(Bspk.sumInt + Bsku.sumInt)}</td></tr>
+  <tr><td>Herav sum termingebyr</td><td class="n">${kr(Bspk.sumFee + Bsku.sumFee)}</td></tr>
+  <tr><td>Herav engangskostnader</td><td class="n">${kr(oneTime)}</td></tr>
+  <tr><td><b>Totalt betalt (B), inkl. nedbetalt hovedstol</b></td><td class="n"><b>${kr(bTotal)}</b></td></tr>
+</table>
+
+<h2>5. Sammenligning og konklusjon</h2>
+<table>
+  <tr><th>&nbsp;</th><th class="n">Mnd. betaling</th><th class="n">Totalt over ${years} år</th></tr>
+  <tr><td>A · Hele lånet i Skue (${pct(p.skueRate)})</td><td class="n">${kr(A.monthly)}</td><td class="n">${kr(aTotal)}</td></tr>
+  <tr><td>B · Flytte ${kr(p.moveAmt)} til SPK</td><td class="n">${kr(bMonthly)}</td><td class="n">${kr(bTotal)}</td></tr>
+  <tr><td><b>Forskjell i favør flytting</b></td><td class="n"><b>${kr(A.monthly-bMonthly)}/mnd</b></td><td class="n"><b>${kr(saving)}</b></td></tr>
+</table>
+
+<div class="concl">
+<p style="margin-top:0">Med tilbudt rente på <b>${pct(p.skueRate)}</b> på hele lånet er det
+${saving>=0 ? `<span class="hl">${kr(saving)} billigere</span> over løpetiden å flytte ${kr(p.moveAmt)} til SPK`
+            : `ikke lønnsomt å flytte – å bli i Skue er allerede billigst`}.</p>
+<p>For at de to alternativene skal koste det samme 
+må Skue tilby en rente på hele lånet på <span class="hl">${pct(match)}</span> eller lavere
+(beregnet inkludert engangskostnadene på ${kr(oneTime)} ved flytting).</p>
+<!-- <p style="margin-bottom:0"><b>Jeg ber derfor om at renten settes til ${pct(match)} eller lavere på hele lånet.</b></p> -->
+</div>
+
+<p class="small">Beregningene er gjort som annuitetslån over ${n} terminer med månedlige forfall.
+SPKs rente kan endres; ved nedgang i SPK-renten øker fordelen ved å flytte ytterligere, og
+break-even-renten Skue må matche blir tilsvarende lavere.</p>
+`;
+document.getElementById('doc').innerHTML = html;
+
+function copyText(ev) {
+  const txt = document.getElementById('doc').innerText.replace(/\n{3,}/g, '\n\n');
+  navigator.clipboard.writeText(txt).then(
+    () => { const b = ev.target; const t = b.textContent; b.textContent = '✓ Kopiert'; setTimeout(()=>b.textContent=t, 1500); },
+    () => alert('Kunne ikke kopiere automatisk – marker teksten og kopier manuelt.')
+  );
+}
+</script>
+</body>
+</html>
