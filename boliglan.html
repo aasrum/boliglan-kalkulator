@@ -254,6 +254,7 @@
       <div class="statline"><span>Nedbetalingstid SPK / Skue</span><span class="v" id="b_terms">–</span></div>
       <div class="statline"><span>Månedlig SPK / Skue</span><span class="v" id="b_monthly_split">–</span></div>
       <div class="statline"><span>Månedlig betaling totalt (inkl. gebyr)</span><span class="v" id="b_monthly">–</span></div>
+      <div class="statline"><span>Totalt betalt SPK / Skue</span><span class="v" id="b_total_split">–</span></div>
       <div class="statline"><span>Sum renter</span><span class="v" id="b_interest">–</span></div>
       <div class="statline"><span>Sum gebyrer + engangskost.</span><span class="v" id="b_fees">–</span></div>
       <div class="statline"><span>Totalt betalt</span><span class="v" id="b_total">–</span></div>
@@ -516,6 +517,7 @@ function recalc() {
   $('b_terms').textContent = `${spkN} / ${stay > 0 ? skueN : 0} terminer`;
   $('b_monthly_split').textContent = kr(Bspk.monthly) + ' / ' + kr(Bskue.monthly);
   $('b_monthly').textContent = kr(Bspk.monthly + Bskue.monthly);
+  $('b_total_split').textContent = kr(Bspk.sumPay) + ' / ' + kr(Bskue.sumPay);
   $('b_interest').textContent = kr(Bspk.sumInt + Bskue.sumInt);
   $('b_fees').textContent = kr(Bspk.sumFee + Bskue.sumFee + oneTime);
   $('b_total').textContent = kr(bTotal);
