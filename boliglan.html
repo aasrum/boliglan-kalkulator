@@ -281,6 +281,34 @@
     </div>
   </div>
 
+  <!-- TERM SENSITIVITY -->
+  <div class="section-title">Nedbetalingstid – hva koster det å korte ned?</div>
+  <div class="card">
+    <div class="tabs" id="termTabs">
+      <button data-loan="A" class="active">Hele lånet (Skue)</button>
+      <button data-loan="SPK">SPK-delen</button>
+      <button data-loan="SKUE">Skue-delen (ved splitt)</button>
+    </div>
+    <p class="hint" id="termLeadHint" style="margin-top:0"></p>
+    <div class="grid cols-2" style="align-items:start">
+      <div>
+        <svg id="termChart" viewBox="0 0 900 340" width="100%" preserveAspectRatio="xMidYMid meet"></svg>
+        <div class="legend">
+          <span><i class="dot" style="background:var(--accent)"></i> Månedlig betaling (inkl. gebyr)</span>
+          <span><i class="dot" style="background:var(--warn)"></i> Sum renter over hele løpet</span>
+          <span><i class="dot" style="background:var(--good)"></i> Dagens restløpetid</span>
+        </div>
+      </div>
+      <div class="scroll" style="max-height:none">
+        <table>
+          <thead><tr><th>Løpetid</th><th>Månedlig</th><th>Sum renter</th><th>Δ / mnd</th><th>Spart renter</th></tr></thead>
+          <tbody id="termTableBody"></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="hint" id="termCombineHint" style="margin-top:12px"></div>
+  </div>
+
   <!-- AMORTIZATION -->
   <div class="section-title">Nedbetalingsplan</div>
   <div class="card">
@@ -330,6 +358,7 @@ const ids = ['P','skueRate','skueFee','termAmount','moveAmt','spkRate','spkFee',
 const val = id => parseFloat($(id).value) || 0;
 
 let currentPlan = 'A';
+let currentTermLoan = 'A';
 
 function annuity(P, r, n) {
   if (n <= 0) return 0;
@@ -537,6 +566,10 @@ function recalc() {
   renderPlan(A, Bspk, Bskue);
   window._plans = { A, SPK: Bspk, SKUE: Bskue };
 
+  // Kontekst for nedbetalingstid-analysen (egen seksjon)
+  window._termCtx = { P, n, moveAmt, stay, spkN, skueN, skueRate, skueFee, spkRate, spkFee, skueStayRate };
+  drawTermAnalysis();
+
   // Lagre input slik at forklaringssida kan bruke samme tall
   try {
     const snap = {};
@@ -597,6 +630,110 @@ function drawChart(A, Bspk, Bskue, n) {
   $('chart').innerHTML = grid +
     `<path d="${lineFor(A.rows)}" fill="none" stroke="var(--skue)" stroke-width="2.5"/>` +
     `<path d="${lineFor(bRows)}" fill="none" stroke="var(--spk)" stroke-width="2.5" stroke-dasharray="2 0"/>`;
+}
+
+// Nedbetalingstid-analyse: månedlig betaling og sum renter som funksjon av løpetid
+function drawTermAnalysis() {
+  const ctx = window._termCtx;
+  if (!ctx) return;
+  let P_sel, rate, fee, label;
+  if (currentTermLoan === 'SPK')       { P_sel = ctx.moveAmt; rate = ctx.spkRate;      fee = ctx.spkFee;  label = 'SPK-delen'; }
+  else if (currentTermLoan === 'SKUE') { P_sel = ctx.stay;    rate = ctx.skueStayRate; fee = ctx.skueFee; label = 'Skue-delen ved splitt'; }
+  else                                 { P_sel = ctx.P;       rate = ctx.skueRate;     fee = ctx.skueFee; label = 'hele lånet i Skue'; }
+
+  const r = rate / 100 / 12;
+  const baseN = ctx.n;                       // dagens restløpetid = referanse
+  const monthlyFor  = t => annuity(P_sel, r, t) + fee;       // inkl. gebyr
+  const interestFor = t => annuity(P_sel, r, t) * t - P_sel; // sum renter (eksakt for annuitet)
+
+  if (!(P_sel > 0)) {
+    $('termChart').innerHTML = `<text x="450" y="170" fill="#9fb0c0" font-size="15" text-anchor="middle">Ingen ${label} å analysere (beløp = 0).</text>`;
+    $('termTableBody').innerHTML = '';
+    $('termLeadHint').textContent = currentTermLoan === 'SKUE'
+      ? 'Hele lånet flyttes til SPK – ingen Skue-del igjen ved splitt.' : '';
+    $('termCombineHint').innerHTML = '';
+    return;
+  }
+
+  const baseMonthly  = monthlyFor(baseN);
+  const baseInterest = interestFor(baseN);
+  const curYears = baseN / 12;
+
+  $('termLeadHint').innerHTML =
+    `Viser <b>${label}</b> (${kr(P_sel)} @ ${pct(rate)}). Kortere løpetid → høyere månedlig betaling, men lavere samlede renter. `
+    + `Differansene er mot dagens restløpetid på <b>${baseN} terminer</b> (${curYears.toFixed(1).replace('.', ',')} år).`;
+
+  // ---- Graf (dobbel y-akse: månedlig venstre, sum renter høyre) ----
+  const W = 900, H = 340, pad = { l: 70, r: 78, t: 18, b: 40 };
+  const plotW = W - pad.l - pad.r, plotH = H - pad.t - pad.b;
+  const minY = 5;
+  const maxY = Math.min(40, Math.max(30, Math.ceil(curYears)));
+  const mMax = monthlyFor(minY * 12) * 1.05;       // høyest månedlig (kortest løpetid)
+  const iMax = interestFor(maxY * 12) * 1.05;       // høyest rentesum (lengst løpetid)
+  const xOf = yr => pad.l + (yr - minY) / (maxY - minY) * plotW;
+  const yM  = v  => pad.t + (1 - v / mMax) * plotH;
+  const yI  = v  => pad.t + (1 - v / iMax) * plotH;
+
+  let svg = '';
+  // gridlines + venstre/høyre akselabler (4 nivåer)
+  for (let g = 0; g <= 4; g++) {
+    const yy = pad.t + g / 4 * plotH;
+    svg += `<line x1="${pad.l}" y1="${yy}" x2="${W - pad.r}" y2="${yy}" stroke="#2c3a4a" stroke-width="1"/>`;
+    svg += `<text x="${pad.l - 8}" y="${yy + 4}" fill="var(--accent)" font-size="11" text-anchor="end">${nf.format(Math.round(mMax * (1 - g / 4) / 100) * 100)}</text>`;
+    svg += `<text x="${W - pad.r + 8}" y="${yy + 4}" fill="var(--warn)" font-size="11" text-anchor="start">${(iMax * (1 - g / 4) / 1e6).toFixed(1).replace('.', ',')}M</text>`;
+  }
+  // x-akse (årstall)
+  for (let yr = minY; yr <= maxY; yr += 5) {
+    svg += `<text x="${xOf(yr)}" y="${H - 14}" fill="#9fb0c0" font-size="11" text-anchor="middle">${yr} år</text>`;
+  }
+  svg += `<text x="${pad.l}" y="${H - 2}" fill="var(--muted)" font-size="10" text-anchor="start">venstre akse: kr/mnd</text>`;
+  svg += `<text x="${W - pad.r}" y="${H - 2}" fill="var(--muted)" font-size="10" text-anchor="end">høyre akse: sum renter</text>`;
+  // markør for dagens restløpetid
+  if (curYears >= minY && curYears <= maxY) {
+    const xc = xOf(curYears);
+    svg += `<line x1="${xc}" y1="${pad.t}" x2="${xc}" y2="${pad.t + plotH}" stroke="var(--good)" stroke-width="1.5" stroke-dasharray="4 4"/>`;
+    svg += `<text x="${xc}" y="${pad.t - 5}" fill="var(--good)" font-size="11" text-anchor="middle">nå</text>`;
+  }
+  // kurver (sampler hvert halvår)
+  let pM = '', pI = '';
+  for (let yr = minY; yr <= maxY + 1e-9; yr += 0.5) {
+    const t = yr * 12;
+    pM += `${pM ? 'L' : 'M'} ${xOf(yr).toFixed(1)} ${yM(monthlyFor(t)).toFixed(1)} `;
+    pI += `${pI ? 'L' : 'M'} ${xOf(yr).toFixed(1)} ${yI(interestFor(t)).toFixed(1)} `;
+  }
+  svg += `<path d="${pI}" fill="none" stroke="var(--warn)" stroke-width="2.5"/>`;
+  svg += `<path d="${pM}" fill="none" stroke="var(--accent)" stroke-width="2.5"/>`;
+  $('termChart').innerHTML = svg;
+
+  // ---- Tabell: utvalgte løpetider med differanser mot dagens ----
+  const yearsSet = new Set();
+  for (let yr = minY; yr <= maxY; yr += 5) yearsSet.add(yr);
+  yearsSet.add(Math.round(curYears));
+  const rowsYears = [...yearsSet].filter(y => y >= minY && y <= maxY).sort((a, b) => a - b);
+  $('termTableBody').innerHTML = rowsYears.map(yr => {
+    const t = Math.round(yr * 12);
+    const m = monthlyFor(t), i = interestFor(t);
+    const dM = m - baseMonthly, dI = i - baseInterest;
+    const isNow = Math.abs(yr - curYears) < 0.5;
+    const dMtxt = isNow ? '<span class="muted">nå</span>'
+      : `<span class="${dM >= 0 ? 'bad' : 'good'}">${dM >= 0 ? '+' : '−'}${kr(Math.abs(dM))}</span>`;
+    const dItxt = isNow ? '<span class="muted">–</span>'
+      : (dI <= 0 ? `<span class="good">${kr(-dI)}</span>` : `<span class="bad">−${kr(dI)}</span>`);
+    return `<tr${isNow ? ' style="background:var(--panel-2)"' : ''}>`
+      + `<td>${yr} år</td><td>${kr(m)}</td><td>${kr(i)}</td><td>${dMtxt}</td><td>${dItxt}</td></tr>`;
+  }).join('');
+
+  // ---- Kombinert hint for splitt-scenariet ----
+  if (currentTermLoan === 'A') {
+    $('termCombineHint').innerHTML =
+      'Vil du se effekten av å korte ned <b>begge</b> lånedeler samtidig ved splitt? Sett egne terminer under '
+      + '«Nedbetalingstid per del» i SPK-kortet – total månedlig og total rente oppdateres i kort B og i konklusjonen.';
+  } else {
+    const otherN = currentTermLoan === 'SPK' ? ctx.skueN : ctx.spkN;
+    $('termCombineHint').innerHTML =
+      `I splitt-scenariet (kort B) regnes denne delen nå over <b>${currentTermLoan === 'SPK' ? ctx.spkN : ctx.skueN} terminer</b>. `
+      + `Endre i «Nedbetalingstid per del» for å teste – den andre delen ligger på ${otherN} terminer.`;
+  }
 }
 
 // Derive term amount from months (reverse of deriveMonths)
@@ -673,6 +810,13 @@ $('planTabs').addEventListener('click', e => {
   e.target.classList.add('active');
   currentPlan = e.target.dataset.plan;
   renderPlan(window._plans.A, window._plans.SPK, window._plans.SKUE);
+});
+$('termTabs').addEventListener('click', e => {
+  if (e.target.tagName !== 'BUTTON') return;
+  [...$('termTabs').children].forEach(b => b.classList.remove('active'));
+  e.target.classList.add('active');
+  currentTermLoan = e.target.dataset.loan;
+  drawTermAnalysis();
 });
 
 // Hent sist lagrede rå-input (om noen), uten å overskrive «regn per»-datoen
