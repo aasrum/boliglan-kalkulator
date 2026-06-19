@@ -80,6 +80,7 @@
   .good { color: var(--good); } .bad { color: var(--bad); } .warn { color: var(--warn); }
   .muted { color: var(--muted); }
   .hint { font-size: .8rem; color: var(--muted); margin-top: 6px; }
+  .hint-inline { font-size: .78rem; color: var(--muted); font-weight: normal; }
   table { width: 100%; border-collapse: collapse; font-size: .85rem; font-variant-numeric: tabular-nums; }
   th, td { text-align: right; padding: 6px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
   th:first-child, td:first-child { text-align: left; }
@@ -151,7 +152,7 @@
         </div>
       </div>
 
-      <label>Restløpetid ved startdato</label>
+      <label>Restløpetid ved startdato <span class="hint-inline">(endre her → terminbeløp oppdateres)</span></label>
       <div class="row">
         <div>
           <div class="suffix-wrap"><input type="number" id="months" value="241" step="1"><span class="suffix">terminer</span></div>
@@ -161,7 +162,7 @@
         </div>
       </div>
       <div class="hint" id="dateHint"></div>
-      <label>Terminbeløp i dag (kr, inkl. gebyr) – brukes til å utlede løpetid</label>
+      <label>Terminbeløp i dag (kr, inkl. gebyr) <span class="hint-inline">(endre her → løpetid utledes via knapp)</span></label>
       <div class="suffix-wrap"><input type="number" id="termAmount" value="23756" step="10"></div>
       <div class="hint" id="deriveHint"></div>
     </div>
@@ -325,7 +326,7 @@ const kr = v => (isFinite(v) ? nf.format(Math.round(v)) + ' kr' : '–');
 const pct = v => (isFinite(v) ? nf2.format(v) + ' %' : '–');
 
 const $ = id => document.getElementById(id);
-const ids = ['P','skueRate','skueFee','months','termAmount','moveAmt','spkRate','spkFee','skueStayRate','costEstab','costTing','costSkuePrio','costSkueChg','costOther'];
+const ids = ['P','skueRate','skueFee','termAmount','moveAmt','spkRate','spkFee','skueStayRate','costEstab','costTing','costSkuePrio','costSkueChg','costOther'];
 const val = id => parseFloat($(id).value) || 0;
 
 let currentPlan = 'A';
@@ -598,6 +599,17 @@ function drawChart(A, Bspk, Bskue, n) {
     `<path d="${lineFor(bRows)}" fill="none" stroke="var(--spk)" stroke-width="2.5" stroke-dasharray="2 0"/>`;
 }
 
+// Derive term amount from months (reverse of deriveMonths)
+function deriveTermAmount() {
+  const P = val('P'), r = val('skueRate')/100/12, fee = val('skueFee');
+  const n = Math.max(1, Math.round(val('months')));
+  const pay = annuity(P, r, n);
+  if (isFinite(pay) && pay > 0) {
+    $('termAmount').value = Math.round(pay + fee);
+    $('deriveHint').innerHTML = `Utledet terminbeløp: <b>${kr(pay + fee)}</b> over ${n} terminer (${(n/12).toFixed(1).replace('.',',')} år) ved ${nf2.format(val('skueRate'))} % rente.`;
+  }
+}
+
 // Derive remaining term from current term amount
 function deriveMonths() {
   const P = val('P'), r = val('skueRate')/100/12, fee = val('skueFee');
@@ -645,6 +657,7 @@ async function fetchRates() {
 ids.forEach(id => $(id).addEventListener('input', recalc));
 ['startDate','asOfDate','spkMonths','skueMonths'].forEach(id => $(id).addEventListener('input', recalc));
 ['skueListRate','skueDiscount'].forEach(id => $(id).addEventListener('input', () => { applyDiscount(); recalc(); }));
+$('months').addEventListener('input', () => { deriveTermAmount(); recalc(); });
 $('deriveBtn').addEventListener('click', deriveMonths);
 $('fetchBtn').addEventListener('click', fetchRates);
 $('resetBtn').addEventListener('click', e => {
